@@ -1,0 +1,16 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/ddloader
+ddloader.so
+ddloader.dylib
+ddloader.dll
+ddloader.a
+ddloader.lib
+ddloader-test-*
+*.exe
+*.pdb
+*.o
+*.obj
+*.lst
