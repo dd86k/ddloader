@@ -32,7 +32,11 @@ string librarySysError()
 			buffer.ptr,
 			ERR_BUF_SZ,
 			null);
-		return len ? cast(string)buffer[0..len] : "Unknown error";
+        
+        // Prevent out of bounds exception caused by us
+        if (len >= ERR_BUF_SZ) len = ERR_BUF_SZ;
+		
+        return len ? cast(string)buffer[0..len] : "Unknown error";
     }
     else version (Posix)
     {
@@ -63,26 +67,31 @@ DynamicLibrary libraryLoad(immutable(string)[] libname...)
     }
     
     // Otherwise, null on error.
+    // Error message will be set according to last library.
     if (lib.handle == null)
-        throw new Exception("error loading libs: "~libname.join(", "));
+        throw new Exception(
+            `Failed to load libraries "`~libname.join(", ")~`": `~librarySysError());
     
     return lib;
 }
     
-void libraryBind(ref DynamicLibrary lib, void **funcptr, string symbolname)
+void libraryBind(ref DynamicLibrary lib, void **funcptr, const(char) *symbolname)
 {
-    assert(funcptr);
+    if (funcptr == null)
+        throw new Exception("Function pointer cannot be null");
+    if (funcptr == null)
+        throw new Exception("Symbol string cannot be null");
     
     version (Windows)
-        *funcptr = GetProcAddress(lib.handle, toStringz(symbolname));
+        *funcptr = GetProcAddress(lib.handle, symbolname);
     else version (Posix)
-        *funcptr = dlsym(lib.handle, toStringz(symbolname));
+        *funcptr = dlsym(lib.handle, symbolname);
     else
         static assert(false, "Implement libraryBind(ref DynamicLibrary, void**, string)");
     
     if (*funcptr == null)
         throw new Exception(
-            `Failed to bind: "`~symbolname~`" due to "`~librarySysError()~`"`);
+            `Failed to bind "`~symbolname~`": `~librarySysError());
 }
 
 void libraryClose(ref DynamicLibrary lib)
