@@ -91,7 +91,7 @@ void libraryBind(ref DynamicLibrary lib, void **funcptr, const(char) *symbolname
     
     if (*funcptr == null)
         throw new Exception(
-            `Failed to bind "`~symbolname~`": `~librarySysError());
+            `Failed to bind "`~fromStringz(symbolname)~`": `~librarySysError());
 }
 
 void libraryClose(ref DynamicLibrary lib)
