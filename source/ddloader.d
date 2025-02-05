@@ -91,7 +91,7 @@ void libraryBind(ref DynamicLibrary lib, void **funcptr, const(char) *symbolname
     
     if (*funcptr == null)
         throw new Exception(
-            `Failed to bind "`~fromStringz(symbolname)~`": `~librarySysError());
+            `Failed to bind "`~cast(string)fromStringz(symbolname)~`": `~librarySysError());
 }
 
 void libraryClose(ref DynamicLibrary lib)
@@ -102,4 +102,29 @@ void libraryClose(ref DynamicLibrary lib)
         dlclose(lib.handle);
     else
         static assert(false, "Implement libraryClose(ref DynamicLibrary)");
+}
+
+version (Windows)
+{
+    unittest
+    {
+        assert(false, "todo");
+    }
+}
+
+version (linux)
+{
+    import core.sys.posix.sys.utsname;
+    
+    alias alias_uname = int function(utsname*);
+    extern (C)
+    __gshared
+    alias_uname _uname;
+    
+    unittest
+    {
+        DynamicLibrary lib = libraryLoad("libc.so.6");
+        
+        libraryBind(lib, cast(void**)&_uname, "uname");
+    }
 }
