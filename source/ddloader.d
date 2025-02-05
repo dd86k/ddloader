@@ -32,11 +32,11 @@ string librarySysError()
 			buffer.ptr,
 			ERR_BUF_SZ,
 			null);
-		return len ? buffer[0..len] : "Unknown error";
+		return len ? cast(string)buffer[0..len] : "Unknown error";
     }
     else version (Posix)
     {
-        return fromStringz( dlerror() );
+        return cast(string)fromStringz( dlerror() );
     }
     else static assert(false, "Implement librarySysError()");
 }
