@@ -13,9 +13,16 @@ else version (Posix)
 
 import std.string;
 
+struct DynamicLibraryError
+{
+    string library;
+    string message;
+}
+
 struct DynamicLibrary
 {
     void *handle;
+    DynamicLibraryError[] errors;
 }
 
 string librarySysError()
@@ -36,45 +43,58 @@ string librarySysError()
         // Prevent out of bounds exception caused by us
         if (len >= ERR_BUF_SZ) len = ERR_BUF_SZ;
 		
-        return len ? cast(string)buffer[0..len] : "Unknown error";
+        return len ? cast(string)(buffer[0..len].idup) : "Unknown error";
     }
     else version (Posix)
     {
-        return cast(string)fromStringz( dlerror() );
+        return fromStringz(dlerror()).idup;
     }
     else static assert(false, "Implement librarySysError()");
 }
 
-DynamicLibrary libraryLoad(immutable(string)[] libname...)
+DynamicLibrary libraryLoad(immutable(string)[] libraries...)
 {
-    if (libname.length == 0)
+    if (libraries.length == 0)
         throw new Exception("No libraries given");
     
-    DynamicLibrary lib = void;
+    DynamicLibrary lib;
     
-    foreach (name; libname)
+    foreach (name; libraries)
     {
         version (Windows)
             lib.handle = LoadLibraryA(toStringz(name));
         else version (Posix)
             lib.handle = dlopen(toStringz(name), RTLD_LAZY);
         else
-            static assert(0, "Implement libraryLoad(immutable(string)[]...)");
+            static assert(false, "Implement libraryLoad(immutable(string)[]...)");
         
         // Break as soon as a value is set.
         if (lib.handle)
             break;
+        
+        // Otherwise, add error that occured
+        DynamicLibraryError err;
+        err.library = name;
+        err.message = librarySysError();
+        lib.errors ~= err;
     }
     
     // Otherwise, null on error.
     // Error message will be set according to last library.
     if (lib.handle == null)
-        throw new Exception(
-            `Failed to load libraries "`~libname.join(", ")~`": `~librarySysError());
+    {
+        string post;
+        foreach (i, err; lib.errors)
+        {
+            if (i) post ~= `, `;
+            post ~= err.library ~ `: "` ~ err.message ~ `"`;
+        }
+        throw new Exception(`Failed to load dynamic libraries: `~post);
+    }
     
     return lib;
 }
-    
+
 void libraryBind(ref DynamicLibrary lib, void **funcptr, const(char) *symbolname)
 {
     if (funcptr == null)
@@ -111,20 +131,16 @@ version (Windows)
         assert(false, "todo");
     }
 }
-
-version (linux)
+else version (Posix)
 {
-    import core.sys.posix.sys.utsname;
+    import core.sys.posix.sys.utsname : utsname;
     
-    alias alias_uname = int function(utsname*);
-    extern (C)
-    __gshared
-    alias_uname _uname;
+    extern (C) __gshared int function(utsname*) uname;
     
     unittest
     {
         DynamicLibrary lib = libraryLoad("libc.so.6");
         
-        libraryBind(lib, cast(void**)&_uname, "uname");
+        libraryBind(lib, cast(void**)&uname, "uname");
     }
 }
