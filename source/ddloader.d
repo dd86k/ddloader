@@ -15,7 +15,7 @@ import std.string;
 
 struct DynamicLibraryError
 {
-    string library;
+    string library; // name
     string message;
 }
 
@@ -25,6 +25,45 @@ struct DynamicLibrary
     DynamicLibraryError[] errors;
 }
 
+class EmptySetLoaderException : Exception
+{
+    this()
+    {
+        super("List of libraries given is empty.");
+    }
+}
+class InvalidSymbolLoaderException : Exception
+{
+    this()
+    {
+        super("Symbol name is null or empty.");
+    }
+}
+class InvalidFunctionLoaderException : Exception
+{
+    this()
+    {
+        super("Function pointer cannot be null.");
+    }
+}
+class BindFailedLoaderException : Exception
+{
+    this(string symbolname)
+    {
+        super(`Failed to bind "`~symbolname~`": `~librarySysError());
+    }
+}
+class LoadFailedLoaderException : Exception
+{
+    this()
+    {
+        // It is not necessary to put all the errors in the message,
+        // thanks to libraryErrors, it can be done on-demand.
+        super(`Failed to load specified dynamic libraries.`);
+    }
+}
+
+private
 string librarySysError()
 {
     version (Windows)
@@ -37,7 +76,7 @@ string librarySysError()
 			GetLastError(),
 			0,	// Default
 			buffer.ptr,
-			ERR_BUF_SZ,
+			ERR_BUF_SZ, // uint
 			null);
         
         // Prevent out of bounds exception caused by us
@@ -52,68 +91,106 @@ string librarySysError()
     else static assert(false, "Implement librarySysError()");
 }
 
+/// Load the first library in a set.
+///
+/// Given a list of library names, the loader will go in-order
+/// and attempt to load at least one library.
+///
+/// On sucess, the first loaded library will be returned.
+///
+/// On failure, when no libraries could be loaded, an LoadFailedLoaderException
+/// exception is thrown.
+///
+/// Params: libraries = Array of libraries to load.
+/// Returns: Dynamic library instance.
 DynamicLibrary libraryLoad(immutable(string)[] libraries...)
 {
     if (libraries.length == 0)
-        throw new Exception("No libraries given");
+        throw new EmptySetLoaderException();
     
     DynamicLibrary lib;
     
     foreach (name; libraries)
     {
+        // If the string is null (by ptr) or empty (by length), toStringz passes
+        // an empty string, so error out explicitly.
+        //
+        // This is more direct and clear than letting the system attempt to describe
+        // the error, which is usually "Invalid handle", etc.
+        if (name is null || name.length == 0)
+            throw new InvalidSymbolLoaderException();
+        
+        // Using toStringz to safer in the case that a string in the array
+        // was dynamically allocated, even if incredibly rare.
         version (Windows)
             lib.handle = LoadLibraryA(toStringz(name));
         else version (Posix)
             lib.handle = dlopen(toStringz(name), RTLD_LAZY);
         else
-            static assert(false, "Implement libraryLoad(immutable(string)[]...)");
+            static assert(false, "Implement libraryLoad");
         
         // Break as soon as a value is set.
         if (lib.handle)
             break;
         
         // Otherwise, add error that occured
-        DynamicLibraryError err;
-        err.library = name;
-        err.message = librarySysError();
-        lib.errors ~= err;
+        lib.errors ~= DynamicLibraryError(name, librarySysError());
     }
     
-    // Otherwise, null on error.
-    // Error message will be set according to last library.
+    // Couldn't load any of the specified libraries.
     if (lib.handle == null)
-    {
-        string post;
-        foreach (i, err; lib.errors)
-        {
-            if (i) post ~= `, `;
-            post ~= err.library ~ `: "` ~ err.message ~ `"`;
-        }
-        throw new Exception(`Failed to load dynamic libraries: `~post);
-    }
+        throw new LoadFailedLoaderException();
     
     return lib;
 }
 
+/// Returns the list of errors for this library.
+///
+/// Only useful after using libraryLoad.
+/// Params: lib = Dynamic library instance.
+/// Returns: Error list, including library names and error message associated.
+DynamicLibraryError[] libraryErrors(ref DynamicLibrary lib)
+{
+    return lib.errors;
+}
+
+/// Check if library is loaded.
+/// Params: lib = Dynamic library instance.
+/// Returns: True ifthe dynamic library handle is populated.
+bool libraryIsLoaded(ref DynamicLibrary lib)
+{
+    return lib.handle != null;
+}
+
+/// Bind a symbol to a function.
+///
+/// Params:
+///   lib = Dynamic library instance.
+///   funcptr = Function pointer.
+///   symbolname = Name of the symbol (currently only does exact matches).
 void libraryBind(ref DynamicLibrary lib, void **funcptr, const(char) *symbolname)
 {
     if (funcptr == null)
-        throw new Exception("Function pointer cannot be null");
-    if (funcptr == null)
-        throw new Exception("Symbol string cannot be null");
+        throw new InvalidFunctionLoaderException();
+    if (symbolname == null)
+        throw new InvalidSymbolLoaderException();
     
+    // The cast is account for a worst-case scenario where somehow,
+    // the definition of these isn't returning void*.
     version (Windows)
-        *funcptr = GetProcAddress(lib.handle, symbolname);
+        *funcptr = cast(void*)GetProcAddress(lib.handle, symbolname);
     else version (Posix)
-        *funcptr = dlsym(lib.handle, symbolname);
+        *funcptr = cast(void*)dlsym(lib.handle, symbolname);
     else
-        static assert(false, "Implement libraryBind(ref DynamicLibrary, void**, string)");
+        static assert(false, "Implement libraryBind");
     
+    // Couldn't bind the function.
     if (*funcptr == null)
-        throw new Exception(
-            `Failed to bind "`~cast(string)fromStringz(symbolname)~`": `~librarySysError());
+        throw new BindFailedLoaderException(cast(string)fromStringz(symbolname));
 }
 
+/// Close dynamic library instance.
+/// Params: lib = Dynamic library instance.
 void libraryClose(ref DynamicLibrary lib)
 {
     version (Windows)
@@ -121,7 +198,10 @@ void libraryClose(ref DynamicLibrary lib)
     else version (Posix)
         dlclose(lib.handle);
     else
-        static assert(false, "Implement libraryClose(ref DynamicLibrary)");
+        static assert(false, "Implement libraryClose");
+    
+    // If closed, at least the loaded check won't fail.
+    lib.handle = null;
 }
 
 version (Windows)
@@ -142,5 +222,9 @@ else version (Posix)
         DynamicLibrary lib = libraryLoad("libc.so.6");
         
         libraryBind(lib, cast(void**)&uname, "uname");
+        
+        utsname n;
+        assert(uname(&n) == 0);
+        assert(n.sysname[0]);
     }
 }
